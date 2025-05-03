@@ -1,0 +1,435 @@
+x-omnistrate-integrations:
+  - omnistrateLogging
+  - omnistrateMetrics
+
+x-omnistrate-service-plan:
+  name: 'SLURM - Fully Hosted'
+  tenancyType: 'OMNISTRATE_DEDICATED_TENANCY'
+  deployment:
+    hostedDeployment:
+      AwsAccountId: '541226919566'
+      AwsBootstrapRoleAccountArn: 'arn:aws:iam::541226919566:role/omnistrate-bootstrap-role'
+      GcpProjectId: 'omnistrate-test-dp'
+      GcpProjectNumber: '383746634676'
+      GcpServiceAccountEmail: 'omnistrate-bootstrap@omnistrate-test-dp.iam.gserviceaccount.com'
+
+services:
+  cluster:
+    image: omnistrate/noop
+    x-omnistrate-capabilities:
+      backupConfiguration:
+        backupRetentionInDays: 7
+        backupPeriodInHours: 2
+    depends_on:
+      - mysql
+      - login
+      - slurmctld
+      - slurmd
+      - slurmdgpu
+      - slurmdbd
+    x-omnistrate-api-params:
+    - key: openOnDemandPassword
+      description: Open On Demand Password
+      name: Open OnDemand Password
+      type: Password
+      modifiable: false
+      required: true
+      export: true
+      parameterDependencyMap:
+        login: openOnDemandPassword
+    - key: mungeKey
+      description: Munge Key
+      name: Munge Key
+      type: Password
+      modifiable: false
+      required: false
+      export: true
+      defaultValue: "luusgkkfnjkayoryfjbkoxrkdkpuggptyzqigmbmakwjbrukpdzoohocxakzvkedrxkbpozlgsivflxbykcpmeurrkoekxeuazpsimmyzrxrstqhveffasywdhgkfowj"
+      parameterDependencyMap:
+        login: mungeKey
+        slurmctld: mungeKey
+        slurmd: mungeKey
+        slurmdgpu: mungeKey
+        slurmdbd: mungeKey
+    - key: authorizedKeys
+      description: SSH Public Key
+      name: SSH Public Key
+      type: Password
+      modifiable: true
+      required: true
+      export: true
+      parameterDependencyMap:
+        login: authorizedKeys
+    - key: slurmdCPUReplicas
+      description: Number of Slurmd CPU-only Replicas
+      name: Slurmd CPU-only Replicas
+      type: Float64
+      modifiable: true
+      required: false
+      defaultValue: "1"
+      export: true
+      limits:
+        min: 1
+        max: 10
+      parameterDependencyMap:
+        slurmd: slurmdReplicas
+    - key: slurmdCPUInstanceType
+      description: Slurmd CPU-only Instance Type
+      name: Slurmd CPU-only Instance Type
+      type: String
+      modifiable: true
+      required: false
+      export: true
+      defaultValue: "t3.medium"
+      parameterDependencyMap:
+        slurmd: instanceType
+    - key: slurmdGPUReplicas
+      description: Number of Slurmd GPU Replicas
+      name: Slurmd GPU Replicas
+      type: Float64
+      modifiable: true
+      required: false
+      defaultValue: "0"
+      export: true
+      limits:
+        min: 0
+        max: 10
+      parameterDependencyMap:
+        slurmdgpu: slurmdReplicas
+    - key: slurmdGPUInstanceType
+      description: Slurmd GPU Instance Type
+      name: Slurmd GPU Instance Type
+      type: String
+      modifiable: true
+      required: false
+      export: true
+      defaultValue: "g4dn.xlarge"
+      parameterDependencyMap:
+        slurmdgpu: instanceType
+  mysql:
+    x-omnistrate-capabilities:
+      networkType: INTERNAL
+    x-omnistrate-mode-internal: true
+    image: mysql:latest
+    environment:
+      MYSQL_RANDOM_ROOT_PASSWORD: yes
+      MYSQL_DATABASE: slurm_acct_db
+      MYSQL_USER: slurm
+      MYSQL_PASSWORD: password
+    x-omnistrate-compute:
+      rootVolumeSizeGi: 50
+      instanceTypes:
+        - cloudProvider: aws
+          name: t4g.medium
+        - cloudProvider: gcp
+          name: e2-medium
+        - cloudProvider: azure
+          name: Standard_B2ms
+    ports:
+      - "3306:3306"
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+  login:
+    x-omnistrate-mode-internal: true
+    command:
+      - login
+    image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+    privileged: true
+    environment:
+      ROCKY_OOD_PASS: $var.openOnDemandPassword
+    ports:
+    - "22:22"
+    - "80:80"
+    - "443:443"
+    volumes:
+    - source: job_data
+      target: /home
+      type: volume
+      x-omnistrate-storage:
+        aws:
+          clusterStorageType: AWS::EFS
+    - ./files/slurm.conf:/etc/slurm/slurm.conf
+    - ./files/gres.conf:/etc/slurm/gres.conf
+    - ./files/cgroupv1.conf:/etc/slurm/cgroup.conf
+    - ./files/sshd_config:/etc/ssh/sshd_config
+    - ./files/authorized_keys:/tmp/authorized_keys
+    - ./files/ood_config:/etc/ood/config/
+    - ./files/httpd.conf:/etc/httpd/conf/httpd.conf
+    - ./tempmounts:/tempmounts
+    x-omnistrate-compute:
+      rootVolumeSizeGi: 50
+      instanceTypes:
+        - cloudProvider: aws
+          name: t4g.small
+        - cloudProvider: gcp
+          name: e2-small
+        - cloudProvider: azure
+          name: Standard_B1ms
+    x-omnistrate-api-params:
+    - key: openOnDemandPassword
+      description: Open On Demand Password
+      name: Open OnDemand Password
+      type: Password
+      modifiable: false
+      required: true
+      export: true
+    - key: authorizedKeys
+      description: SSH Public Key
+      name: SSH Public Key
+      type: Password
+      modifiable: true
+      required: true
+      export: true
+    - key: mungeKey
+      description: Munge Key
+      name: Munge Key
+      type: Password
+      modifiable: false
+      required: true
+      export: true
+    x-omnistrate-actionhooks:
+    - scope: NODE
+      type: INIT
+      image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+      command:
+        - /bin/bash
+        - -c
+      commandTemplate: |
+        #!/bin/bash
+        echo "{{ $var.mungeKey }}" > /tmp/munge.key
+        chmod 0400 /tmp/munge.key
+        chown rocky:rocky /tmp/munge.key
+        mkdir -p /tempmounts/etc/ssh
+        ssh-keygen -A -f /tempmounts
+  slurmctld:
+    x-omnistrate-mode-internal: true
+    image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+    privileged: true
+    command:
+      - slurmctld
+      - -vvv
+    ports:
+      - "6817:6817"
+    volumes:
+      - source: job_data
+        target: /home
+        type: volume
+        x-omnistrate-storage:
+          aws:
+            clusterStorageType: AWS::EFS
+      - ./files/slurm.conf:/etc/slurm/slurm.conf
+      - ./files/gres.conf:/etc/slurm/gres.conf
+      - ./files/cgroupv1.conf:/etc/slurm/cgroup.conf
+      - ./spool:/var/spool/slurmctld
+    x-omnistrate-compute:
+      rootVolumeSizeGi: 50
+      instanceTypes:
+        - cloudProvider: aws
+          name: t4g.small
+        - cloudProvider: gcp
+          name: e2-small
+        - cloudProvider: azure
+          name: Standard_B1ms
+    x-omnistrate-api-params:
+    - key: mungeKey
+      description: Munge Key
+      name: Munge Key
+      type: Password
+      modifiable: false
+      required: true
+      export: true
+    x-omnistrate-actionhooks:
+    - scope: NODE
+      type: INIT
+      command:
+        - /bin/bash
+        - -c
+      image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+      commandTemplate: |
+        #!/bin/bash
+        echo "{{ $var.mungeKey }}" > /tmp/munge.key
+        chmod 0400 /tmp/munge.key
+  slurmd:
+    x-omnistrate-mode-internal: true
+    image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+    privileged: true
+    command:
+      - slurmd
+      - -vvv
+      - -N
+      - "{{ $sys.compute.node.name }}"
+    ports:
+      - "6818:6818"
+    volumes:
+      - source: job_data
+        target: /home
+        type: volume
+        x-omnistrate-storage:
+          aws:
+            clusterStorageType: AWS::EFS
+      - ./files/slurm.conf:/etc/slurm/slurm.conf
+      - ./files/gres.conf:/etc/slurm/gres.conf
+      - ./files/cgroupv1.conf:/etc/slurm/cgroup.conf
+    x-omnistrate-compute:
+      rootVolumeSizeGi: 50
+      replicaCountAPIParam: slurmdReplicas
+      instanceTypes:
+        - cloudProvider: aws
+          apiParam: instanceType
+        - cloudProvider: gcp
+          apiParam: instanceType
+        - cloudProvider: azure
+          apiParam: instanceType          
+    x-omnistrate-capabilities:
+      enableMultiZone: true
+    x-omnistrate-api-params:
+    - key: mungeKey
+      description: Munge Key
+      name: Munge Key
+      type: Password
+      modifiable: false
+      required: true
+      export: true
+    - key: slurmdReplicas
+      description: Number of Slurmd Replicas
+      name: Slurmd Replicas
+      type: Float64
+      modifiable: true
+      required: true
+      export: true
+    - key: instanceType
+      description: Instance Type
+      name: Instance Type
+      type: String
+      modifiable: true
+      required: true
+      export: true
+    x-omnistrate-actionhooks:
+    - scope: NODE
+      type: INIT
+      command:
+        - /bin/bash
+        - -c
+      image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+      commandTemplate: |
+        #!/bin/bash
+        echo "{{ $var.mungeKey }}" > /tmp/munge.key
+        chmod 0400 /tmp/munge.key
+  slurmdgpu:
+    x-omnistrate-mode-internal: true
+    image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+    privileged: true
+    command:
+      - slurmd
+      - -vvv
+      - -N
+      - "{{ $sys.compute.node.name }}"
+    ports:
+      - "6818:6818"
+    volumes:
+      - source: job_data
+        target: /home
+        type: volume
+        x-omnistrate-storage:
+          aws:
+            clusterStorageType: AWS::EFS
+      - ./files/slurm.conf:/etc/slurm/slurm.conf
+      - ./files/gres.conf:/etc/slurm/gres.conf
+      - ./files/cgroupv1.conf:/etc/slurm/cgroup.conf
+    x-omnistrate-compute:
+      rootVolumeSizeGi: 50
+      replicaCountAPIParam: slurmdReplicas
+      instanceTypes:
+        - cloudProvider: aws
+          apiParam: instanceType
+        - cloudProvider: gcp
+          apiParam: instanceType
+        - cloudProvider: azure
+          apiParam: instanceType          
+    x-omnistrate-capabilities:
+      enableMultiZone: true
+    x-omnistrate-api-params:
+    - key: mungeKey
+      description: Munge Key
+      name: Munge Key
+      type: Password
+      modifiable: false
+      required: true
+      export: true
+    - key: slurmdReplicas
+      description: Number of Slurmd Replicas
+      name: Slurmd Replicas
+      type: Float64
+      modifiable: true
+      required: true
+      export: true
+    - key: instanceType
+      description: Instance Type
+      name: Instance Type
+      type: String
+      modifiable: true
+      required: true
+      export: true
+    x-omnistrate-actionhooks:
+    - scope: NODE
+      type: INIT
+      command:
+        - /bin/bash
+        - -c
+      image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+      commandTemplate: |
+        #!/bin/bash
+        echo "{{ $var.mungeKey }}" > /tmp/munge.key
+        chmod 0400 /tmp/munge.key
+  slurmdbd:
+    x-omnistrate-mode-internal: true
+    image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+    privileged: true
+    command:
+      - slurmdbd
+      - -vvv
+    ports:
+      - "6819:6819"
+    environment:
+      StoragePass: password
+    volumes:
+      - ./files/slurm.conf:/etc/slurm/slurm.conf
+      - ./files/gres.conf:/etc/slurm/gres.conf
+      - ./files/cgroupv1.conf:/etc/slurm/cgroup.conf
+      - ./files/slurmdbd.conf:/tmp/slurmdbd.conf
+    x-omnistrate-compute:
+      rootVolumeSizeGi: 50
+      instanceTypes:
+        - cloudProvider: aws
+          name: t4g.small
+        - cloudProvider: gcp
+          name: e2-small
+        - cloudProvider: azure
+          name: Standard_B1ms
+    x-omnistrate-api-params:
+    - key: mungeKey
+      description: Munge Key
+      name: Munge Key
+      type: Password
+      modifiable: false
+      required: true
+      export: true
+    x-omnistrate-actionhooks:
+    - scope: NODE
+      type: INIT
+      command:
+        - /bin/bash
+        - -c
+      image: ghcr.io/omnistrate/slurm-docker-cluster:b5g21c6
+      commandTemplate: |
+        #!/bin/bash
+        echo "{{ $var.mungeKey }}" > /tmp/munge.key
+        chmod 0400 /tmp/munge.key
+
+volumes:
+  job_data:
+    driver: sharedFileSystem
+    driver_opts:
+      efsThroughputMode: provisioned
+      efsPerformanceMode: generalPurpose
+      efsProvisionedThroughputInMibps: 100
